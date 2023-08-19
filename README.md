@@ -1,5 +1,5 @@
-# ProgPython
-This repository contains personnel machine learning projects. These projects are a way of testing the implementation of methods learnt in the following resources. 
+# M2 Public Health Data Science
+This repository contains personnel work relating to my second year of masters et ISPED / University of Bordeaux . 
 
-### 📚Books:
-- Deep Learning Illustrated by Jon Krohn, Grant Beyleveld (summer 2023)
+### Prerequisite work:
+- Study of R for Data Science by Garrett Grolemund and Hadley Wickham (summer 2023)
