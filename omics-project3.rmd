@@ -1,0 +1,150 @@
+---
+title: "omics project"
+output: html_document
+date: "2023-10-18"
+---
+
+```{r }
+library(readxl)
+library(magrittr)
+library(dplyr)
+library(edgeR)
+library(tableone)
+library(dearseq)
+library(flashClust)
+library(dendextend)
+
+#change these paths to our demographics.csv, raw_counts_transposed.xlsx, metadata.xlsx
+demographics <- read.csv("/Users/alecstear/Downloads/DM_YF_Demographics_withoutDateBirth.csv")
+raw_counts <- read_excel("/Users/alecstear/Downloads/OMICS_proj_raw_counts_transposed.xlsx")
+metadata <-  read_excel("/Users/alecstear/Downloads/OMICS_proj_metadata.xlsx")
+dim(metadata)
+dim(raw_counts)
+dim(demographics)
+```
+
+
+```{r }
+# recode some VisitID
+table(metadata$VisitID)
+
+metadata$VisitID <- ifelse(metadata$VisitID==29, 28,
+                           ifelse(metadata$VisitID==31, 28,
+                                  ifelse(metadata$VisitID==38, 28,
+                                         ifelse(metadata$VisitID==4,3, metadata$VisitID))))
+table(metadata$VisitID)
+```
+
+
+```{r }
+demographics$Sex <- as.factor(demographics$Sex)
+table(demographics$Sex)
+t1 <- tableone::CreateTableOne(data=demographics)
+t1$ContTable
+t1$CatTable
+table(metadata$ParticipantID, metadata$VisitID)
+# there is no YF004 so we have 21 patients
+```
+
+
+```{r filtering + DGE_List + normalization (CPM2 and TMM) }
+dim(raw_counts)
+gene_no0 <- rowSums(raw_counts[,-c(1:5,90)]) > 0
+table(gene_no0)
+raw_counts_no0 <- filter(raw_counts, gene_no0)
+dim(raw_counts_no0)
+
+mycpmfun <- function(x) {
+    return((x/sum(x)) * 10^6)
+}
+cpm <- apply(raw_counts_no0[,-c(1:5,90)], MARGIN = 2, FUN = mycpmfun)
+raw_counts_no0_cpm2 <- filter(raw_counts_no0, rowSums(cpm >2) >= 5)
+dim(raw_counts_no0_cpm2)
+
+DGE_list <- DGEList(counts =raw_counts_no0_cpm2[,-c(1:5,90)], samples = metadata, genes = raw_counts_no0_cpm2[,5])
+
+DGE_List_norm <- calcNormFactors(DGE_list, method = "TMM")
+raw_counts_no0_cpm2_TMM_log2cpm <- cpm(DGE_List_norm , log = TRUE) # is this needed? 
+dim(raw_counts_no0_cpm2_TMM_log2cpm)
+head(raw_counts_no0_cpm2_TMM_log2cpm)
+```
+
+
+
+```{r before and after boxplots and barplots}
+# before normalization boxplot
+bp_col <- as.character(metadata$VisitID)
+table(bp_col)
+
+
+boxplot(raw_counts[,-c(1:5,90)], col = bp_col,  xlab = "Samples", ylab = "Raw counts", axes = FALSE)
+axis(2)
+box()
+par(mar = c(5, 5, 5, 5))
+legend("topright", title = "Day", legend = unique(metadata$VisitID), fill = bp_col, bg = "white", cex = 0.3, horiz = FALSE, pch=15)
+
+?par
+# after normalization boxplot
+boxplot(raw_counts_no0_cpm2_TMM_log2cpm, col = bp_col, xlab = "Samples", ylab = "Normalized log2 cpm TMM counts", axes = FALSE)
+axis(2)
+box()
+par(mar = c(5, 5, 5, 5))
+legend("topright", title = "Day", legend = unique(metadata$VisitID), fill = bp_col, bg = "white", cex = 0.2, horiz = FALSE, pch=15)
+
+# before normalization barplot
+barplot(colSums(raw_counts[,-c(1:5,90)]), col = bp_col, xlab = "Samples", ylab = "Library size")
+par(mar = c(5, 5, 5, 5))
+legend("topright", title = "Day", legend = unique(metadata$VisitID), fill = bp_col, bg = "white", cex = 0.2, horiz = FALSE, pch=15)
+
+
+# after normalization barplot
+barplot(colSums(raw_counts_no0_cpm2_TMM_log2cpm[,-c(1:5,90)]), col = bp_col, xlab = "Samples", ylab = "Library size", names.arg = "")
+legend("topright", title = "Day", legend = unique(metadata$VisitID), fill = bp_col, bg = "white", cex = 0.2, horiz = FALSE, pch=15)
+
+```
+
+```{r dendogram}
+deucl_normalized <- dist(t(raw_counts_no0_cpm2_TMM_log2cpm[,-c(1:5,90)]))
+
+library("factoextra")
+#euclidian distance, poorer outcome
+distance <- dist(deucl_normalized)
+model <- hclust(distance, method = "complete"   )
+fviz_dend(model, k = 4,
+    color_labels_by_k = TRUE,
+    rect = TRUE)
+
+#ward distance, better outcome
+distance <- dist(deucl_normalized)
+model <- hclust(distance, method = "ward.D2"   )
+fviz_dend(model, k = 4,
+    color_labels_by_k = TRUE,
+    rect = TRUE)
+```
+
+```{r model matrix}
+DGE_List_norm$samples
+# when you do this, you see that we should have removed VisitID29, VisitID31, VisitID39, VisitID4
+# remove the whole row in raw or just column here?
+
+design <- as.data.frame(model.matrix(~VisitID, data = DGE_List_norm$samples))
+
+design <- design %>% as.matrix()
+head(design)
+dim(design)
+```
+
+```{r dearseq}
+res_dearseq <- dearseq::dear_seq(exprmat = DGE_List_norm$counts, variables2test = design[,c("VisitID1","VisitID28","VisitID3"), drop = FALSE], covariates = design[, "(Intercept)", drop = FALSE], which_test = "asymptotic", preprocessed = FALSE)
+
+summary(res_dearseq)
+
+dearseq_signif <- res_dearseq$pvals$adjPval < 0.05
+
+genelist_dearseq <- DGE_List_norm$genes$Genes[as.logical(dearseq_signif)]
+
+length(genelist_dearseq)
+head(genelist_dearseq)
+
+```
+
